@@ -31,7 +31,7 @@ use GSEA gene ontology to find clusters main terms
 
 Example for pairwise fit :
 
-![cluster_ 54_3_1.02](cluster_ 54_3_1.02.png)
+![cluster_54_3_1.02](cluster_54_3_1.02.png)
 
 Example for Heatmap comparison between 3 different experiments 
 
