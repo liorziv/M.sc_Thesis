@@ -9,108 +9,91 @@ from scipy import signal
 import pandas as pd
 import csv
 import os
+import consts as c
 
-TIME_COURSE = [0, 30, 60, 120, 240, 480]
-time_line_3 = [0, 1, 2, 30, 31, 32, 60, 61, 62, 120, 121, 122, 240, 241, 242, 480, 481, 482]
-time_line_2 = [0, 1, 30, 31, 60, 61, 120, 121, 240, 241, 480, 481]
-rep_21_14 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-rep_89 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 9, 10, 11, 12, 13, 14, 15]
 
-################################################
-''' Defines the model of expression level of a gene 
+def GS_model(theta, t_out_i, y0):
+    '''
+    Defines the model of gene expression levels in time
     using differential equations
-    y0      - the first value of y
-    t_out_i - time points of the result (to output)
-    theta:
+    :param theta: the gs model params
     c       - basel transcription level
     h       - transcription level (coefficient for the GS)
     b       - degradation level
     t0      - peak place (mean)
     sig     - peak width (variance)
-'''
-
-
-################################################
-def GS_model(theta, t_out_i, y0):
-    # here try to return a concatenate array with all values per 1 repeat (sometimes 2/3)
+    :param t_out_i: time points of the result (to output)
+    :param y0: the first value of y
+    :return: fitted y by the model
+    '''
     t_full = np.linspace(0, 483, 484, dtype='int')
     y_hat_1 = odeint(model, y0, t_full, args=(theta,))
 
     return y_hat_1[t_out_i]
 
 
-################################################
-''' Define the GS model differential equation
-    y - amounth of reads for specific time
-    t - time
-    thetha (as in GS model)
-'''
-
-
-################################################
 def model(y, t, theta):
-    # y,t,c,h,b,mu,sig
+    '''
+    Define the GS model differential equation
+    :param y: amount of reads speard in a few repeats in time
+    :param t: time
+    :param theta:  (as in GS model)  y,t,c,h,b,mu,sig
+    :return:
+    '''
     c, h, b, t0, sig = theta[0], theta[1], theta[2], theta[3], theta[4]
     at = c + h * np.exp(-0.5 * (((t0 - t) / sig) ** 2))  # c
     dydt = at - b * y
     return dydt
 
 
-################################################
-''' calculets the RMSE of the fitted y values
-    and the real gene expression levels
-    real_y - the gene expression data
-    fitted_y - y we get from the model
-'''
+def calc_rmse(real_y, fitted_y, peak_of_fit):
+    '''
+    calc the RMSE with a little help of the ratio between the peak itself
+    usually when the fit is perfect for a gene we wouldn't believe it will
+    happen with a small sigma and a really large peak at a place there is
+    no data (meaning we wont use it in the computation of the RMSE)
+    therefore is is added here small bug here is that according to this it will try to fit a really small peak
+    to the model compared to the max of the real data - not good
+    but luckily the entire score depends more on the fit of all the rest of the points
+    therefore it it will only relay on the difference of the peak at real from the fitted y
+    the RMSE will be bad. Therefore it probably tries to turn this ration close to 1.
+
+    :param real_y: the gene expression data
+    :param fitted_y: y we get from the model best fit
+    :param peak_of_fit: maximal value of fit
+    :return: rmse between those two with a small penalty to avoid mistakes of large gaps between real to fit peak
+    '''
+    return np.sqrt(np.mean((real_y[:, None] - fitted_y) ** 2)) + (peak_of_fit / np.max(real_y))
 
 
-###############################################
-def calc_rmse(real_y_i, fitted_y, peak_of_fit):
-    #   # calc the RMSE with a little help of the ratio between the peak itself
-    # usually when the fit is perfect for a gene we wouldn't believe it will
-    # happen with a small sigma and a really large peak at a place there is
-    # no data (meaning we wont use it in the computation of the RMSE)
-    # therefore is is added here
-    # small bug here is that according to this it will try to fit a really small peak
-    # to the model compared to the max of the real data - not good
-    # but luckily the entire score depends more on the fit of all the rest of the points
-    # therefore it it will only relay on the difference of the peak at real from the fitted y
-    # the RMSE will be bad. Therefore it probably tries to turn this ration close to 1.
-    return np.sqrt(np.mean((real_y_i[:, None] - fitted_y) ** 2)) + (peak_of_fit / np.max(real_y_i))
 
-
-################################################
-''' calculets the RSS of the fitted y values
-    and the real gene expression levels
-    real_y   - the gene expression data
-    fitted_y - y we get from the model
-'''
-
-
-################################################
 def calc_RSS(real_y, fitted_y):
+    '''
+    calculets the RSS of the fitted y values and the real gene expression levels
+    :param real_y: the real gene expression data
+    :param fitted_y: y we get from fitting the gs model
+    :return: rss result
+    '''
     return np.sum(np.square(fitted_y - real_y[:, None]))
 
 
-################################################
-''' find the best parameters to fit the model
+def find_GS_model_fit(theta, real_y, rep_num, file_id):
+    '''
+    find the best parameters to fit the model
     to our gene expression data using fmin
-    theta    - as above
-    real_y_i - the real values from the source
-    rep_num  - number of repeats(per time) in the experiments
-    file_id  - a unique number represent specific experiment      
-'''
-
-
-################################################
-def find_GS_model_fit(theta, real_y_i, rep_num, file_id):
+    :param theta: the initial params guess
+    :param real_y: the actual gene expression
+    :param rep_num: number of repeats per time frame
+    :param file_id: experiment id
+    :return: rmse of the best guess found by f.min
+    '''
     t_out = choose_time_line(file_id)[1]  # plot of real data timeline
     penalty = np.inf  # if c is negative
 
     # here the fitted y is calculated by the GS
     # differential equation model
 
-    y_hat = GS_model(theta, np.linspace(0, 482, 483, dtype='int'), np.mean(real_y_i[:rep_num]))  # y0= c/b
+    y_hat = GS_model(theta, np.linspace(0, 482, 483, dtype='int'), np.mean(real_y[:rep_num]))  # y0= c/b
     max_of_fitted_y = np.max(y_hat)
     y_hat = y_hat[t_out]  # get only the values at the real data index's
 
@@ -126,7 +109,7 @@ def find_GS_model_fit(theta, real_y_i, rep_num, file_id):
     if (initial_cond and not sigma_sm_6_deg_gt_0003):
         penalty = 0
     # if all the condition are met then the penalty is zeroed and the fit might work
-    RMSE = calc_rmse(real_y_i, y_hat, max_of_fitted_y)
+    RMSE = calc_rmse(real_y, y_hat, max_of_fitted_y)
 
     # just for sanity checks
     # total_opt_output_list.append(RMSE + penalty)
@@ -135,264 +118,170 @@ def find_GS_model_fit(theta, real_y_i, rep_num, file_id):
     return RMSE + penalty  # this is what optimize try to minimize
 
 
-#############################################
-''' Define the time points for the data or the plot
-    exp_id - a unique number which represents a specific experiment
-'''
 
-
-#############################################
 def choose_time_line(exp_id):
+
+    '''
+    Define the time points for the data or the plot
+    :param exp_id: a unique number which represents a specific experiment
+    :return: time points array
+    '''
     res = []
-    if exp_id == 222:
-        res = [time_line_2, time_line_2]
-    elif exp_id == 2110:
-        res = [time_line_3, time_line_3]
-    elif exp_id == 2114:
-        res = [time_line_3, np.concatenate((time_line_3[:10], time_line_3[12:]), axis=0)]
-    elif exp_id == 89:
-        res = [time_line_3, np.concatenate((time_line_3[:11], time_line_3[13:17]), axis=0)]
-    elif exp_id == 90:
-        res = [time_line_3,
-               np.concatenate((time_line_3[:2],
-                               time_line_3[3:10], time_line_3[12:17]),
+    if exp_id == c.FILE_ID_222:
+        res = [c.TIME_LINE_2, c.TIME_LINE_2]
+    elif exp_id == c.FILE_ID_21_10:
+        res = [c.TIME_LINE_3, c.TIME_LINE_3]
+    elif exp_id == c.FILE_ID_21_14:
+        res = [c.TIME_LINE_3, np.concatenate((c.TIME_LINE_3[:10], c.TIME_LINE_3[12:]), axis=0)]
+    elif exp_id == c.FILE_ID_89:
+        res = [c.TIME_LINE_3, np.concatenate((c.TIME_LINE_3[:11], c.TIME_LINE_3[13:17]), axis=0)]
+    elif exp_id == c.FILE_ID_90:
+        res = [c.TIME_LINE_3,
+               np.concatenate((c.TIME_LINE_3[:2],
+                               c.TIME_LINE_3[3:10], c.TIME_LINE_3[12:17]),
                               axis=0)]
     return res
 
 
-''' Create 7 guesses for all 5 parameters
-    real_y_i    - real y data(source)
-    rep_num     - number of repeats per time frame
-    file id     - unique id per experiment
-    mean_values - the mean of repeats in each time point
-'''
 
 
-################################################
-def minimize_GS_model_fit(real_y_i, rep_num, file_id, mean_values):
+def minimize_GS_model_fit(real_y, rep_num, file_id, mean_values):
+    '''
+    Create 7 guesses for all 5 parameters
+    :param real_y: real y data(source)
+    :param rep_num: number of repeats per time frame
+    :param file_id: unique id per experiment
+    :param mean_values: the mean of repeats in each time point
+    :return:
+    '''
     # takes the first peak
     peaks = signal.find_peaks(mean_values)[0]
     peaks_val = mean_values[peaks]
 
     t0_idx = np.argmax(mean_values) * rep_num  # gets the peak index in the real_y_i array
     t0_1 = choose_time_line(file_id)[0][t0_idx]  # get the x(time) of the peak(for the plot)
-    if (len(peaks) == 0):
-        t0_2 = choose_time_line(file_id)[0][len(real_y_i) - 1]  # the peak is at 480
+    if len(peaks) == 0:
+        t0_2 = choose_time_line(file_id)[0][len(real_y) - 1]  # the peak is at 480
     else:
         induction_start = np.argmax(peaks_val)
-
         t0_2 = choose_time_line(file_id)[0][max(peaks[induction_start] * 2 - 1, 0)]  # choose_time_line(rep_num)[t0_idx]
 
     b_1 = 0.001
-    c_1 = np.mean(real_y_i[:rep_num])
+    c_1 = np.mean(real_y[:rep_num])
     h_1 = 0.01
     sig = 10
 
     # a bit more induction
     b_2 = 0.2
     h_2 = 2
-    h_3 = 0.2 * max(real_y_i)
+    h_3 = 0.2 * max(real_y)
 
     # high induction
-    c_3 = np.mean(real_y_i[:rep_num]) / np.mean(real_y_i)
+    c_3 = np.mean(real_y[:rep_num]) / np.mean(real_y)
     h_3 = 10
 
-    # high induction
-
+    #high induction
     c_7 = 100
-    h_7 = (np.max(real_y_i) - np.min(real_y_i)) / 2
+    h_7 = (np.max(real_y) - np.min(real_y)) / 2
     b_7 = 0.399
 
-    initial_guess_1 = [c_1, h_1, b_1, t0_1, sig]  # basic - mean basal level
-    initial_guess_2 = [c_1, h_2, b_2, t0_1, sig]  # higher degradation and induction
-    initial_guess_3 = [c_3, h_3, b_2, t0_1, sig]  # mean of cont / mean of all as basel level, high induction
-    initial_guess_4 = [c_1, h_3, b_1, choose_time_line(file_id)[0][t0_idx], 200]
-    initial_guess_5 = [c_1, h_3, b_1, t0_2, 8]
-    initial_guess_6 = [c_1, 0, 0, 480, sig]  # only going up
-    initial_guess_7 = [c_7, h_7, b_7, t0_1, sig]  # genes which are usually not good(not affected by the treatment)
-    # ## each initial guess solution
+    initial_guess = np.zeros((7,5))
+    initial_guess[0] = [c_1, h_1, b_1, t0_1, sig]  # basic - mean basal level
+    initial_guess[1] = [c_1, h_2, b_2, t0_1, sig]  # higher degradation and induction
+    initial_guess[2] = [c_3, h_3, b_2, t0_1, sig]  # mean of cont / mean of all as basel level, high induction
+    initial_guess[3] = [c_1, h_3, b_1, choose_time_line(file_id)[0][t0_idx], 200]
+    initial_guess[4] = [c_1, h_3, b_1, t0_2, 8]
+    initial_guess[5] = [c_1, 0, 0, 480, sig]  # only going up
+    initial_guess[6] = [c_7, h_7, b_7, t0_1, sig]  # genes which are usually not good(not affected by the treatment)
+
     # fmin try to minimize find GS model func which returns the RMSE of the model, real data.
+    return find_best_fit(initial_guess, real_y,rep_num, file_id)
 
-    minimum_1 = optimize.fmin(find_GS_model_fit, initial_guess_1, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_1 = minimum_1[1]
-    minimum_1 = minimum_1[0]
 
-    minimum_7 = optimize.fmin(find_GS_model_fit, initial_guess_7, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_7 = minimum_7[1]
-    minimum_7 = minimum_7[0]
-
-    minimum_2 = optimize.fmin(find_GS_model_fit, initial_guess_2, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_2 = minimum_2[1]
-    minimum_2 = minimum_2[0]
-
-    minimum_3 = optimize.fmin(find_GS_model_fit, initial_guess_3, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-
-    rmse_3 = minimum_3[1]
-    minimum_3 = minimum_3[0]
-
-    # going up slowly - curl
-    minimum_4 = optimize.fmin(find_GS_model_fit, initial_guess_4, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_4 = minimum_4[1]
-    minimum_4 = minimum_4[0]
-
-    minimum_5 = optimize.fmin(find_GS_model_fit, initial_guess_5, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_5 = minimum_5[1]
-    minimum_5 = minimum_5[0]
-
-    minimum_6 = optimize.fmin(find_GS_model_fit, initial_guess_6, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_6 = minimum_6[1]
-    minimum_6 = minimum_6[0]
+def find_best_fit(initial_guess, real_y, rep_num, file_id):
+    '''
+    get array of guesses as initialization for the fit, and find the best params using fmin
+    :param initial_guess: number of initial guesses
+    :param real_y: the actual gene expression
+    :param rep_num: number of repaets per time frame
+    :param file_id: id of experiment
+    :return: the best params and their rmse
+    '''
+    num_of_guesses = initial_guess.shape[0]
+    param_res = np.zeros((1, num_of_guesses))
+    rmse_res = np.zeros((1, num_of_guesses))
+    for i in range(num_of_guesses):
+        param_res[i], rmse_res[i] = optimize.fmin(find_GS_model_fit, initial_guess[i], args=(real_y, rep_num, file_id),
+                                                  full_output=True)[0:2]
 
     # find the guess with the smallest RMSE
-    res_arr = [minimum_1, minimum_2, minimum_3, minimum_4, minimum_5, minimum_6, minimum_7]
-    rmse_arr = [rmse_1, rmse_2, rmse_3, rmse_4, rmse_5, rmse_6, rmse_7]
-    idx = np.argmin(rmse_arr)
-    print('RMSE index: ' + str(idx))
-    return res_arr[idx], rmse_arr[idx]
-    ################################################
+    idx = np.argmin(rmse_res)
+    return param_res[idx], rmse_res[idx]
 
-
-''' take the best guess(lowest RMSE)
-    and look around it
-    real_y_i    - real y data(source)
-    rep_num     - number of repeats per time frame
-    file id     - unique id per experiment
-    mean_values - the mean of repeats in each time point
-    theta       - as above
-'''
-
-
-################################################
-def minimiztion_optimiztion(real_y_i, rep_num, file_id, theta):
+def minimiztion_optimiztion(real_y, rep_num, file_id, theta):
+    '''
+    take the best guess(lowest RMSE) and search around it
+    :param real_y: real y data(source)
+    :param rep_num: number of repeats per time frame
+    :param file_id: unique id per experiment
+    :param theta: params of the best fit
+    :return: new best params
+    '''
     # trying to optimize the guess by moving a bit in each of the variables
     c, h, b, t0, sig = theta
-    initial_guess_1 = [c, h / 2, b, t0, sig + 10]
-    initial_guess_2 = [c, h / 2, b, t0, sig + 20]
-    initial_guess_3 = [c, h / 2, b, t0 - 10, sig + 10]
-    initial_guess_4 = [c, h / 2, b, t0 - 20, sig + 20]
-    initial_guess_5 = [c, h, b, t0, sig]
+    initial_guess[0] = np.zeros((7,5))
+    initial_guess[1] = [c, h / 2, b, t0, sig + 10]
+    initial_guess[2] = [c, h / 2, b, t0, sig + 20]
+    initial_guess[3] = [c, h / 2, b, t0 - 10, sig + 10]
+    initial_guess[4] = [c, h / 2, b, t0 - 20, sig + 20]
+    initial_guess[5] = [c, h, b, t0, sig]
 
-    minimum_1 = optimize.fmin(find_GS_model_fit, initial_guess_1, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    minimum_2 = optimize.fmin(find_GS_model_fit, initial_guess_2, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    minimum_3 = optimize.fmin(find_GS_model_fit, initial_guess_3, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    minimum_4 = optimize.fmin(find_GS_model_fit, initial_guess_4, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    minimum_5 = optimize.fmin(find_GS_model_fit, initial_guess_5, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-
-    rmse_1 = minimum_1[1]
-    minimum_1 = minimum_1[0]
-
-    rmse_2 = minimum_2[1]
-    minimum_2 = minimum_2[0]
-
-    rmse_3 = minimum_3[1]
-    minimum_3 = minimum_3[0]
-
-    rmse_4 = minimum_4[1]
-    minimum_4 = minimum_4[0]
-
-    rmse_5 = minimum_5[1]
-    minimum_5 = minimum_5[0]
-
-    res_arr = [minimum_1, minimum_2, minimum_3, minimum_4, minimum_5]
-    rmse_arr = [rmse_1, rmse_2, rmse_3, rmse_4, rmse_5]
-    idx = np.argmin(rmse_arr)
-    print('err index: ' + str(idx))
-    return res_arr[idx], rmse_arr[idx]
-
-    ################################################
+    return find_best_fit(initial_guess, real_y, rep_num, file_id)
 
 
-''' using fmin simplex algorithem to find solution
-    real_y_i    - real y data(source)
-    rep_num     - number of repeats per time frame
-    file id     - unique id per experiment
-    guess       - a solution to GS model 
-'''
-
-
-################################################
-def optimize_fmin(real_y_i, rep_num, file_id, guess_1, guess_2, guess_3):
-    # high induction
-    minimum_1 = optimize.fmin(find_GS_model_fit, guess_1, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-
-    minimum_2 = optimize.fmin(find_GS_model_fit, guess_2, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    minimum_3 = optimize.fmin(find_GS_model_fit, guess_3, args=(real_y_i, rep_num, file_id),
-                              full_output=True)
-    rmse_1 = minimum_1[1]
-    minimum_1 = minimum_1[0]
-
-    rmse_2 = minimum_2[1]
-    minimum_2 = minimum_2[0]
-
-    rmse_3 = minimum_3[1]
-    minimum_3 = minimum_3[0]
-    print('##RMSE#')
-
-    res_arr = [minimum_1, minimum_2, minimum_3]
-    rmse_arr = [rmse_1, rmse_2, rmse_3]
-    idx = np.argmin(rmse_arr)
-    print(rmse_arr[idx])
-
-    return res_arr[idx]
-
-
-################################################
-''' plot all both of the models with the original
-    data
-    y_real - the real gene exprssion values
-    y_fitted - the fitted values by our model
-    data_mean - represent the const model
-'''
-
-
-################################################
-def plot_fit(y_real_i, y_fitted, y_fitted_model,
+def plot_fit(y_real, y_fitted, y_fitted_noised,
              data_mean, id, p_val,
-             p_val_model, theta, fd_name, file_id):
+             p_val_noised, theta, fd_name, file_id):
+    '''
+    plot  both of the models with the original data
+    :param y_real: real gene expression values
+    :param y_fitted: gs model fit gene expression values
+    :param y_fitted_noised:  "" with noised y
+    :param data_mean: mean of the real y
+    :param id: experiment id
+    :param p_val: real y p-values
+    :param p_val_noised: noised
+    :param theta: best fit params of gs model
+    :param fd_name:
+    :return:
+    '''
     # plot the results
     plt.close("all")
-
     t_plot = choose_time_line(file_id)[1]
-
     ax1 = plt.subplot(111)
     ax1.plot(np.linspace(0, len(y_fitted), len(y_fitted)),
              10 + 5 * np.exp(-0.5 * (((60 - np.linspace(0, len(y_fitted), len(y_fitted))) / 10) ** 2)), label='fit')
-    ax1.plot(t_plot, y_real_i, 'ro', label='data')
+    ax1.plot(t_plot, y_real, 'ro', label='data')
     ax1.plot(t_plot, data_mean, 'g+:', label='Mean')
-    ax1.plot(np.linspace(0, len(y_fitted_model), len(y_fitted_model)), y_fitted_model, 'b+:', label='fit+10')
+    ax1.plot(np.linspace(0, len(y_fitted_noised), len(y_fitted_noised)), y_fitted_noised, 'b+:', label='fit+10')
     ax1.set_xlabel('Time')
     ax1.set_xticks(range(0, 481, 60))  # 30
     step = 10
-    if (10 + max(np.max(y_fitted), np.max(y_real_i)) > 280 and max(np.max(y_fitted), np.max(y_real_i)) > 0):
+    if (10 + max(np.max(y_fitted), np.max(y_real)) > 280 and max(np.max(y_fitted), np.max(y_real)) > 0):
         step = 20
-    elif (10 + max(np.max(y_fitted), np.max(y_real_i)) > 480 and max(np.max(y_fitted), np.max(y_real_i)) > 0):
+    elif (10 + max(np.max(y_fitted), np.max(y_real)) > 480 and max(np.max(y_fitted), np.max(y_real)) > 0):
         step = 50
 
-    ax1.set_yticks(range(0, int(10 + max(np.max(y_fitted), np.max(y_real_i))), step))
+    ax1.set_yticks(range(0, int(10 + max(np.max(y_fitted), np.max(y_real))), step))
     ax1.set_xbound([-10, 490])
     ax1.set_ybound([0, 20])
 
     ax1.set_ylabel('Read Count')
-    ax1.set_title('p-value: ' + str("%g" % p_val) + ' p-value +10: ' + str("%g" % p_val_model) + '\n basal(c): ' + str(
+    ax1.set_title('p-value: ' + str("%g" % p_val) + ' p-value +10: ' + str("%g" % p_val_noised) + '\n basal(c): ' + str(
         "%g" % round(theta[0], 3)) + ' ind(h): ' + str(
         "%g" % round(theta[1], 3)) + '\n ' + 'deg(b): ' + str("%g" % round(theta[2], 3)) + ' t0: ' + str(
         "%g" % round(theta[3], 3)) + ' sig: ' + str("%g" % round(int(theta[4]), 3)))
     plt.savefig(fd_name + str(id) + '.png', bbox_inches='tight')
-
     plt.close('all')
 
 
@@ -400,32 +289,31 @@ def plot_fit(y_real_i, y_fitted, y_fitted_model,
 ''' 
  Two more plot functions
 '''
-
-
-def plot_only_fit(y_real_i, y_fitted, data_mean, id, p_val, theta, fd_name, file_id, folder_name):
+def plot_only_fit(y_real, y_fitted, data_mean, id, p_val, theta, fd_name, file_id, folder_name):
+    '''
+    plot only the fit data(no mean)
+    '''
     # plot the results
     plt.close("all")
-
     t_plot = choose_time_line(file_id)[1]
-
     fig = plt.figure(figsize=(12, 3))
 
     ax1 = plt.subplot(111)
     ax1.plot(np.linspace(0, len(y_fitted), len(y_fitted)), y_fitted, label='fit')
-    ax1.plot(t_plot, y_real_i, 'ro', label='data')
+    ax1.plot(t_plot, y_real, 'ro', label='data')
     ax1.plot(t_plot, data_mean, 'g+:', label='Mean')
     # ax1.plot(np.linspace(0, len(y_fitted_model), len(y_fitted_model)), y_fitted_model, 'b+:', label='fit+10')
     ax1.set_xlabel('Time')
     ax1.set_xticks(range(0, 481, 30))
     step = 10
-    if (10 + max(np.max(y_fitted), np.max(y_real_i)) > 280 and max(np.max(y_fitted), np.max(y_real_i)) > 0):
+    if (10 + max(np.max(y_fitted), np.max(y_real)) > 280 and max(np.max(y_fitted), np.max(y_real)) > 0):
         step = 20
-    elif (10 + max(np.max(y_fitted), np.max(y_real_i)) > 480 and max(np.max(y_fitted), np.max(y_real_i)) > 0):
+    elif (10 + max(np.max(y_fitted), np.max(y_real)) > 480 and max(np.max(y_fitted), np.max(y_real)) > 0):
         step = 50
 
-        ax1.set_yticks(range(0, int(10 + max(np.max(y_fitted), np.max(y_real_i))), step))
+        ax1.set_yticks(range(0, int(10 + max(np.max(y_fitted), np.max(y_real))), step))
     ax1.set_xbound([-10, 490])
-    ax1.set_ybound([0, 10 + max(np.max(y_fitted), np.max(y_real_i))])
+    ax1.set_ybound([0, 10 + max(np.max(y_fitted), np.max(y_real))])
     ax1.set_ylabel('Read Count')
     ax1.set_title('p-value: ' + str("%g" % p_val) + '\n basal(c): ' + str(
         "%g" % round(theta[0], 3)) + ' ind(h): ' + str(
@@ -436,8 +324,8 @@ def plot_only_fit(y_real_i, y_fitted, data_mean, id, p_val, theta, fd_name, file
     plt.close('all')
 
 
-def plot_for_rep(y_real_i, y_fitted, y_fitted_model, data_mean, x_labels, rep_num, id, p_val, theta, fd_name, file_id):
-    # plot the results
+def plot_for_rep(y_fitted,  fd_name):
+    # plot the fit results for figures
     plt.close("all")
 
     ax1 = plt.subplot(1, 1, 1)
@@ -449,19 +337,18 @@ def plot_for_rep(y_real_i, y_fitted, y_fitted_model, data_mean, x_labels, rep_nu
     plt.close('all')
 
 
-################################################
-'''
+
+def F_test(real_y, y_fitted, to_print=False):
+    '''
     F test for the two models :
     1. constant model (average)
     2. GS model
-    real y   - real values from source file
-    y_fitted - values from the GS model fit
-    to_print - a boolean, if true print description
+    :param real_y: real values from source file
+    :param y_fitted: values from the GS model fit
+    :param to_print: a boolean, if true print description
     of f test results
-'''
-
-
-def F_test(real_y, y_fitted, to_print=False):
+    :return: the p-value of the test
+    '''
     # F test
     real_y = real_y + 1
     y_fitted = y_fitted + 1
@@ -499,10 +386,8 @@ def F_test(real_y, y_fitted, to_print=False):
         print(len(data_mean))
         print("*******RSS(H0,H1)*******")
         print(model_1_RSS, model_2_RSS)
-
         print("************************")
-    if (np.isnan((1 - scipy.stats.f.cdf(F, DFbet, DFwith)))):
-        print("yes")
+
 
     print('F-critical: ' + str(scipy.stats.f.ppf(0.9, DFbet, DFwith)))
     print('p-value: ' + str(1 - scipy.stats.f.cdf(F, DFbet, DFwith)))
@@ -513,81 +398,69 @@ def F_test(real_y, y_fitted, to_print=False):
     return 1 - scipy.stats.f.cdf(F, DFbet, DFwith)
 
 
-#######################################
-'''
+
+def calc_models_fitted_y(real_y, file_id, rep_num,
+                         theta_hat_GS, curr_gene, toPrint):
+    '''
     recomputes the fitted values using the
     theta parameters and the GS model
-    new_real_y  - fitted model values
-    file id     - unique id for each experiment
-    new_rep_num - number of repeats per time frame
-    theta       - as in the model
-    curr_gene   - current gene name
-    to_print    - boolean, if true print a few details  
-'''
-
-
-def calc_models_fitted_y(new_real_y, file_id, new_rep_num,
-                         theta_hat_GS, curr_gene, toPrint):
+    :param real_y: real gene expression values
+    :param file_id: experiment id
+    :param rep_num: number of repeats
+    :param theta_hat_GS: best params using GS model fit
+    :param curr_gene: the current gene name
+    :param toPrint: if print results to stdout
+    :return:
+    '''
     # real data time line
     t_out = choose_time_line(file_id)[1]
-
     # expressive model getting the real fitted y
-    y_fitted_GS = GS_model(theta_hat_GS, np.linspace(0, 483, 484, dtype='int'), np.mean(new_real_y[:new_rep_num]))
-    # np.mean(new_real_y[:new_rep_num]))
-
+    y_fitted_GS = GS_model(theta_hat_GS, np.linspace(0, 483, 484, dtype='int'), np.mean(real_y[:rep_num]))
     # const model
-    data_mean = np.repeat(np.mean(new_real_y), len(new_real_y))
+    data_mean = np.repeat(np.mean(real_y), len(real_y))
 
     if (toPrint == True):
         print('#################')
         print(curr_gene)
-        print('dif off peak : ' + str(np.max(y_fitted_GS) / np.max(new_real_y)))
-        print('model-fit (RMSE): ' + str(calc_rmse(new_real_y, y_fitted_GS[t_out], np.max(y_fitted_GS))))
-        print('const-fit (RMSE): ' + str(calc_rmse(new_real_y, data_mean, data_mean[0])))
+        print('dif off peak : ' + str(np.max(y_fitted_GS) / np.max(real_y)))
+        print('model-fit (RMSE): ' + str(calc_rmse(real_y, y_fitted_GS[t_out], np.max(y_fitted_GS))))
+        print('const-fit (RMSE): ' + str(calc_rmse(real_y, data_mean, data_mean[0])))
         print('#################')
 
-    return (new_real_y, y_fitted_GS, t_out, data_mean, calc_rmse(new_real_y, y_fitted_GS[t_out], np.max(y_fitted_GS)))
+    return (new_real_y, y_fitted_GS, t_out, data_mean, calc_rmse(real_y, y_fitted_GS[t_out], np.max(y_fitted_GS)))
 
 
-################################
-'''
- calculates the mean of each time frame
- file id  - unique id for each experiment
- real y   -  data from source file
- rep_num  - number of repeats per time frame
- x_labels - time frames 
-'''
-
-
-##################################3
 def add_mean_point(file_id, real_y, rep_num, x_labels):
-    if (file_id == 2114):
+    '''
+     calculates the mean of each time frame
+    :param file_id: unique id for each experiment
+    :param real_y: data from source file
+    :param rep_num: number of repeats per time frame
+    :param x_labels: time frames
+    :return: mean of repeats vec
+    '''
+    if file_id == c.FILE_ID_21_14:
         real_y = np.concatenate((real_y[:9], np.repeat(real_y[9], 3), real_y[10:]))
-    if (file_id == 90):
+    if file_id == c.FILE_ID_90:
         real_y = np.concatenate(
             (real_y[:2], np.mean(real_y[:2])[None], real_y[3:9], np.repeat(real_y[9], 3), real_y[9:],
              np.mean(real_y[15:17])[None]))
-    if (file_id == 89):
+    if file_id == c.FILE_ID_89:
         real_y = np.concatenate((
             real_y[:9], np.mean(real_y[9:11])[None], real_y[9:11], np.mean(real_y[11:13])[None], real_y[11:13],
             np.repeat(real_y[13:14], 3)))
 
     real_y_reshape = np.reshape(real_y, (int(len(real_y) / rep_num), rep_num))
     mean_of_rep = np.mean(real_y_reshape, axis=1)
-    real_y_reshape = np.column_stack((real_y_reshape, mean_of_rep))
-    new_real_y = np.reshape(real_y_reshape, ((rep_num + 1) * len(x_labels), 1))
-    new_rep_num = rep_num + 1
-    if (file_id == 2114):
-        new_rep_num = [new_rep_num, new_rep_num, new_rep_num, 1, new_rep_num, new_rep_num]
-    if (file_id == 90):
-        new_rep_num = [3, new_rep_num, new_rep_num, 1, new_rep_num, new_rep_num]
-    if (file_id == 89):
-        new_rep_num = [new_rep_num, new_rep_num, new_rep_num, new_rep_num - 1, new_rep_num - 1, 1]
 
     return mean_of_rep
 
 
 def check_GS(thetha):
+    '''
+    for sanity check
+    :param thetha: params fit
+    '''
     x = np.linspace(0, 480, 481, dtype='int')
     y_fitted_GS = GS_model([0.2, 1, 0.2, 200, 5], np.linspace(0, 480, 481, dtype='int'), 0)
     plt.figure()
@@ -595,16 +468,24 @@ def check_GS(thetha):
     plt.plot(x, y_fitted_GS)
     plt.subplot(2, 1, 2)
     plt.plot(x, GS_model(thetha, np.linspace(0, 480, 481, dtype='int'), 0))
-    # plt.plot(np.linspace(0, 480, 5*481, dtype='int'),np.exp(-0.5*(((thetha[3]- x)/thetha[-1])**2)))
-    # mlab.normpdf(x, mu, sigma)
-    # plt.plot(np.repeat(np.linspace(0, 480, 481, dtype='int'), 1), y_fitted_GS, 'g-', label='data')
-    # plt.plot(np.linspace(0, 480, 481, dtype='int'), mlab.normpdf(np.linspace(0, 480, 481, dtype='int'), 10, 10))
     plt.show()
-
     # plt.savefig('test.jpg')
 
 
 def plotting_data_by_names(GS_path, names_path, data_path, file_id, folder_name):
+    '''
+    plots genes by name
+    # plotting_data_by_names("C:/Users/Lior/Desktop/GS_model_fit/RES/222/all_res_222.csv",
+    #                        "C:/Users/Lior/Documents/high_ind.csv",
+    #                        "C:/Users/Lior/Desktop/GS_model_fit/data_222_esat_t_normalized.csv",222,
+    #                        'C:/Users/Lior/Desktop/GS_model_fit/High_ind')
+    :param GS_path: path to GS model results file ("C:/Users/Lior/Desktop/GS_model_fit/RES/222/all_res_222.csv")
+    :param names_path: csv with all gene names ("gene_names.csv")
+    :param data_path: normalized gene data
+    :param file_id: experiment id
+    :param folder_name: the output folder
+    :return:
+    '''
     ## reader part
     reader = csv.reader(open(names_path, "r"), delimiter=",")
     # reader = pd.read_csv(file_path,encoding="ISO-8859-1")

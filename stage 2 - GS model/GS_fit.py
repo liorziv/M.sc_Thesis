@@ -1,26 +1,42 @@
-from gs_model import *
+import gs_model as gs
 import sys
 import file_reader
-
+import consts as c
 
 '''
 Main part
 '''
+def write_res_to_csv(fitted_params_list, fitted_params_list_noised, gene_names, p_values, p_values_noised, start, end,
+                     output_folder):
+    '''
+    saves all the results into csv
+    :param fitted_params_list: a list of all model best params per gene
+    :param fitted_params_list_noised: same but for noised y's
+    :param gene_names: list of gene names
+    :param p_values: p-values results for real y values
+    :param p_values_noised:"" for noised y
+    :param start: start gene
+    :param end: end gene
+    :param output_folder: output folder to save csv's
+    '''
+    df_1 = pd.DataFrame(gene_names[start:end], columns=['Genes'])
 
+    df_2 = pd.DataFrame(fitted_params_list, columns=['c', 'h', 'b', 't0', 'sig'])
+    df_1['p-val'] = p_values
+    df_real = pd.concat((df_1, df_2), axis=1)
 
+    df_noised = pd.DataFrame(fitted_params_list_noised, columns=['c', 'h', 'b', 't0', 'sig'])
+    df_noised['p-val'] = p_values_noised
+    df_noised = pd.concat((df_1, df_noised), axis=1)
+
+    path_to_res = os.path.join(output_folder, "real_y_{s}_{e}.csv".format(s=start, e=end))
+    path_to_model = os.path.join(output_folder, "noised_y_{s}_{e}.csv".format(s=start, e=end))
+    df_noised.to_csv(path_to_model, index=None)
+    df_real.to_csv(path_to_res, index=None)
 
 def main():
-    # plotting_data_by_names("C:/Users/Lior/Desktop/GS_model_fit/RES/222/all_res_222.csv",
-    #                        "C:/Users/Lior/Documents/high_ind.csv",
-    #                        "C:/Users/Lior/Desktop/GS_model_fit/data_222_esat_t_normalized.csv",222,
-    #                        'C:/Users/Lior/Desktop/GS_model_fit/High_ind')
-    check_GS([0,0,0,480,20])
-    FILE_NAME, FILE_ID, OUTPUT_FOLDER = sys.argv[1], sys.argv[2], sys.argv[3]
+    file_name, file_id, output_folder = sys.argv[1], int(sys.argv[2]), sys.argv[3]
     start, end = int(sys.argv[4]), int(sys.argv[5])
-    ## represents the file id
-    file_id = int(FILE_ID)
-    ## file full path
-    file_name = FILE_NAME
     ##expression matrix from csv file
     exp_mat = file_reader.get_gene_expression_matrix(file_name)
     # number of time repeats
@@ -30,76 +46,52 @@ def main():
     # in order to save p-values and fitted theta
     p_values = []
     p_values_model = []
-    fitted_params_list = np.zeros((end - start, 5))
-    fitted_params_list_model = np.zeros((2 * (end - start), 5))
+    fitted_params_list = np.zeros((end - start, c.GS_MODEL_PARAM_NUM))
+    fitted_params_list_noised = np.zeros((2 * (end - start), c.GS_MODEL_PARAM_NUM))
     str_lab = []
-    # labels for the plot
-    x_labels = ['Cont', '30 Min', '60 Min', '120 Min', '240 Min', '480 Min']
 
-    counter = 0
-    conter_2 = 0
-    for i in range(start, end):  # 10072
+    plt_ctr = 0
+    data_ctr = 0
+    #go over each gene and find GS model fit result
+    for i in range(start, end):
         curr_gene = gene_names[i]
-        real_y = exp_mat[i, :]  # this is a line from the expression matrix
-        new_real_y, new_rep_num = real_y, rep_num  #
-        mean_of_real_y_reps = add_mean_point(file_id, real_y, rep_num, x_labels)
-        model_y = real_y + np.random.normal(10, 2, len(real_y))  # to avoid genes with low read number
-        mean_of_model_y_reps = add_mean_point(file_id, model_y, rep_num, x_labels)
+        real_y = exp_mat[i, :]  # this is a gene from the expression matrix
+        mean_of_real_y_reps = add_mean_point(file_id, real_y, rep_num, c.X_LABELS)
+        # to avoid genes with low read number we add noise to the sample and see if the fit is still significant
+        noised_y = real_y + np.random.normal(10, 2, len(real_y))
+        mean_of_noised_y_reps = gs.add_mean_point(file_id, noised_y, rep_num, c.X_LABELS)
         # finds the fit params - try two runs of the model
-        theta_hat_GS_real_1,rmse_1 = minimize_GS_model_fit(new_real_y, new_rep_num, file_id,mean_of_real_y_reps)
-        theta_hat_GS_real_2,rmse_2 = minimize_GS_model_fit(new_real_y, new_rep_num, file_id, mean_of_real_y_reps)
+        theta_hat_GS_real = gs.minimize_GS_model_fit(real_y, rep_num, file_id,mean_of_real_y_reps)[0]
 
-        # getting the real data fitted y
-        idx = np.argmin([rmse_1,rmse_2])
-        theta_hat_GS_real = minimiztion_optimiztion(real_y,new_rep_num,file_id,mean_of_real_y_reps,theta_hat_GS_real)[idx]
-
-        # getting the model fitted y
-        theta_hat_GS_model = minimize_GS_model_fit(model_y, new_rep_num, file_id,mean_of_model_y_reps )[0] #[1.1636571972164833, 0, 0, 139.8649874483564, 13.090487859211333]
-
+        # continue on the best solution searching at its range
+        theta_hat_GS_real = gs.minimiztion_optimiztion(real_y,rep_num,file_id,mean_of_real_y_reps,theta_hat_GS_real)
+        theta_hat_GS_noised = gs.minimize_GS_model_fit(noised_y, rep_num, file_id,mean_of_noised_y_reps )[0]
         # in order the save into the csv
-#        fitted_params_list[counter, :] = theta_hat_GS_real
-        fitted_params_list_model[conter_2, :] = theta_hat_GS_real
-        fitted_params_list_model[conter_2 + 1, :] = theta_hat_GS_model
-        conter_2 += 2
-        str_lab.append('real_y')
-        str_lab.append('real_y + 10')
+        fitted_params_list[plt_ctr, :] = theta_hat_GS_real
+        fitted_params_list_noised[plt_ctr, :] = theta_hat_GS_noised
 
-        # calculate the y's according to the two models
-        print('real- fit')
-
-        reduced_y, y_fitted_GS, t_out, data_mean, _ = calc_models_fitted_y(new_real_y, file_id, new_rep_num,
+        # calculate the y's according to the two models(real + noised)
+        reduced_y, y_fitted_GS, t_out, data_mean, _ = gs.calc_models_fitted_y(real_y, file_id, rep_num,
                                                                                theta_hat_GS_real, curr_gene, True)
-        # print('model- fit')
-        reduced_y_model, y_fitted_GS_model, t_out_model, data_mean_model, _ = calc_models_fitted_y(model_y, file_id,
-                                                                                                      new_rep_num, theta_hat_GS_model,
+        reduced_y_noised, y_fitted_GS_model, t_out_model, data_mean_model, _ = gs.calc_models_fitted_y(noised_y, file_id,
+                                                                                                      rep_num, theta_hat_GS_noised,
                                                                                                        curr_gene, True)
 
-        p_val_real = 0 #F_test(reduced_y, y_fitted_GS[t_out], data_mean)
-        p_val_model = 0 #F_test(reduced_y_model, y_fitted_GS_model[t_out_model], data_mean_model)
+        #calculate p-value using F-test
+        p_val_real = gs.F_test(reduced_y, y_fitted_GS[t_out], data_mean)
+        p_val_noised = gs.F_test(reduced_y_noised, y_fitted_GS_model[t_out_model], data_mean_model)
 
-        plot_fit(real_y, y_fitted_GS, y_fitted_GS_model, data_mean, x_labels, new_rep_num,
-                 gene_names[start + counter], p_val_real, p_val_model,
-                 theta_hat_GS_real, OUTPUT_FOLDER, file_id)
+        gs.plot_fit(real_y, y_fitted_GS, y_fitted_GS_model, data_mean,  c.X_LABELS, rep_num,
+                 gene_names[start + plt_ctr], p_val_real, p_val_noised,
+                 theta_hat_GS_real, output_folder, file_id)
 
         p_values.append(p_val_real)
         p_values_model.append(p_val_real)
-        p_values_model.append(p_val_model)
-        counter += 1
+        p_values_model.append(p_val_noised)
+        plt_ctr += 1
+    write_res_to_csv(fitted_params_list, fitted_params_list_noised, gene_names, p_values, p_values_model, start, end,
+                     output_folder)
 
-    df_2 = pd.DataFrame(fitted_params_list, columns=['c', 'h', 'b', 't0', 'sig'])
-    df_1 = pd.DataFrame(gene_names[start:end], columns=['Genes'])
-    df_1['p-val'] = p_values
-    #    df_1['p-val_model'] = p_values_model
-    res_table = pd.concat((df_1, df_2), axis=1)
-    path_to_res = os.path.join(OUTPUT_FOLDER, "res_table_{s}_{e}.csv".format(s=start, e=end))
-    df_model = pd.DataFrame(fitted_params_list_model, columns=['c', 'h', 'b', 't0', 'sig'])
-    df_model['p-val'] = p_values_model
-    df_3 = pd.DataFrame([gene_names[i] for i in range(start, end) for j in range(2)], columns=['Genes'])
-    df_3['Y-values'] = str_lab
-    df_model = pd.concat((df_3, df_model), axis=1)
-    path_to_model = os.path.join(OUTPUT_FOLDER, "model_{s}_{e}.csv".format(s=start, e=end))
-    df_model.to_csv(path_to_model, index=None)
-    res_table.to_csv(path_to_res, index=None)
 
 main()
 
